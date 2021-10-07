@@ -1,0 +1,49 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+    This is an AWS CloudFormation template for the first lab
+    assignment of the course I am taking through Campus Mölndal.
+
+Resources:
+    WebServer:
+        Type: AWS::EC2::Instance
+        Properties:
+            AvailabilityZone: 'eu-north-1a'
+            InstanceType: t3.micro
+            SecurityGroups:
+            - !Ref InboundHTTPTrafficSecGrp
+            - !Ref InboundSSHTrafficSecGrp
+            KeyName: DemoServerSysAdminSSHKey
+            ImageId: ami-0ff338189efb7ed37
+            UserData:
+                !Base64 |
+                #!/bin/bash
+                apt update -y
+                apt install nginx -y
+
+    InboundHTTPTrafficSecGrp:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Enable inbound HTTP traffic via port 80.
+            SecurityGroupIngress:
+            - Description: Allow IPv4.
+              IpProtocol: tcp
+              FromPort: 80
+              ToPort: 80
+              CidrIp: 0.0.0.0/0
+            - Description: Allow IPv6.
+              IpProtocol: tcp
+              FromPort: 80
+              ToPort: 80
+              CidrIpv6: ::/0
+
+    InboundSSHTrafficSecGrp:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Enable inbound SSH traffic via port 22.
+            SecurityGroupIngress:
+                - IpProtocol: tcp
+                  FromPort: 22
+                  ToPort: 22
+                  CidrIp: 0.0.0.0/0
