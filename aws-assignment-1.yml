@@ -1,0 +1,152 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+
+
+Description: >
+  This CloudFormation stack template is meant to create a robust, secure
+  and scalable architecture for a simple nginx web server for my
+  course in AWS at Campus Mölndal.
+
+
+Parameters:
+  VpcId:
+    Type: "AWS::EC2::VPC::Id"
+    Description: "VpcId of your exisiting Virtual Private Cloud (VPC)"
+    ConstraintDescription: "must be the VPC Id of an existing Virtual Private Cloud."
+  Subnets:
+    Type: "List<AWS::EC2::Subnet::Id>"
+    Description: "The list of SubnetIds in your Virtual Private Cloud (VPC)"
+    ConstraintDescription: >
+      must be a list of at least two existing subnets associated with at least
+      two different availability zones. They should be residing in the selected
+      Virtual Private Cloud.
+  KeyName:
+    Type: "AWS::EC2::KeyPair::KeyName"
+    Description: "Name of an existing EC2 KeyPair to enable SSH access of the instances"
+    ConstraintDescription: "must be the name of an existing EC2 KeyPair."
+
+
+Resources:
+  ApplicationLoadBalancer:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      Subnets: !Ref Subnets
+      SecurityGroups:
+        - !Ref ALBSecGrp
+  ALBListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      DefaultActions:
+      - TargetGroupArn: !Ref WebServerTargetGroup
+        Type: "forward"
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: "HTTP"
+
+  WebServerASG:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+      DesiredCapacity: "2"
+      MinSize: "1"
+      MaxSize: "3"
+      HealthCheckGracePeriod: 360
+      HealthCheckType: "ELB"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref WebServerTargetGroup
+      VPCZoneIdentifier: !Ref Subnets
+  LaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateName: !Sub "${AWS::StackName}-web-server-template"
+      LaunchTemplateData:
+        # ImageId points to Ubuntu Server LTS (64-bit x86); Free tier eligible.
+        ImageId: "ami-0ff338189efb7ed37"
+        InstanceType: "t3.micro"
+        SecurityGroupIds:
+          - !Ref WebServerSecGrp
+        # Simple script to install Nginx web server and overwrite the default index.html-file.
+        UserData: !Base64 |
+          #!/bin/bash
+          apt update
+          apt install nginx -y
+          printf "
+          <html>
+          <head>
+            <title>Hampus Web Server</title>
+            <style>
+                body {
+                display: grid;
+                place-content: center;
+                height: 100vh;
+                margin: 0;
+                font-family: sans-serif;
+            }
+            </style>
+          </head>
+          <body>
+            <h1>Hampus Magnifika Hemsida</h1>
+            <p><em>$RANDOM</em></p>
+          </body>
+          </html>
+          " > /var/www/html/index.html
+
+  WebServerTargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      Port: 80
+      Protocol: "HTTP"
+      VpcId: !Ref VpcId
+
+  ALBSecGrp:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Specifies rules for in-/outbound HTTP."
+      VpcId: !Ref VpcId
+  ALBAllowInboundHTTP:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      GroupId: !GetAtt ALBSecGrp.GroupId
+      IpProtocol: "tcp"
+      CidrIp: "0.0.0.0/0"
+      FromPort: 80
+      ToPort: 80
+  ALBAllowOutboundHTTP:
+    Type: "AWS::EC2::SecurityGroupEgress"
+    Properties:
+      GroupId: !GetAtt ALBSecGrp.GroupId
+      DestinationSecurityGroupId: !GetAtt WebServerSecGrp.GroupId
+      IpProtocol: "tcp"
+      FromPort: 80
+      ToPort: 80
+
+  WebServerSecGrp:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Specifies inbound rules for HTTP and SSH"
+      VpcId: !Ref VpcId
+  WebServerAllowInboundSSH:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      GroupId: !GetAtt WebServerSecGrp.GroupId
+      IpProtocol: "tcp"
+      CidrIp: "0.0.0.0/0"
+      FromPort: 22
+      ToPort: 22
+  WebServerAllowInboundHTTP:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      GroupId: !GetAtt WebServerSecGrp.GroupId
+      SourceSecurityGroupId: !GetAtt ALBSecGrp.GroupId
+      IpProtocol: "tcp"
+      FromPort: 80
+      ToPort: 80
+
+
+Outputs:
+  URL:
+    Description: "URL of the website"
+    Value:
+      Fn::Join: [ "", [ "http://", !GetAtt ApplicationLoadBalancer.DNSName ] ]
