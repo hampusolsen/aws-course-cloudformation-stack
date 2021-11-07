@@ -85,6 +85,10 @@ Resources:
 
   WordPressAutoScalingGroup:
     Type: "AWS::AutoScaling::AutoScalingGroup"
+    DependsOn:
+      - WPContentMntTarget1
+      - WPContentMntTarget2
+      - WPContentMntTarget3
     Properties:
       DesiredCapacity: "2"
       MinSize: "1"
@@ -166,9 +170,40 @@ Resources:
         Status: 'DISABLED'
       Encrypted: false
       LifecyclePolicies:
-        - TransitionToIA: 'AFTER_90_DAYS'
-          TransitionToPrimaryStorageClass: 'AFTER_1_ACCESS'
+        - TransitionToIA: 'AFTER_30_DAYS'
       PerformanceMode: 'generalPurpose'
+  WPContentSecGrp:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow reading of files by WordPress instances.'
+      SecurityGroupIngress:
+        - FromPort: 2049
+          IpProtocol: 'tcp'
+          SourceSecurityGroupId: !GetAtt WordPressSecGrp.GroupId
+          ToPort: 2049
+      VpcId: !Ref VpcId
+  WPContentMntTarget1:
+    Type: 'AWS::EFS::MountTarget'
+    Properties:
+      FileSystemId: !Ref WordPressContentEFS
+      SecurityGroups:
+        - !Ref WPContentSecGrp
+      SubnetId: !Select [0, !Ref SubnetIds]
+  WPContentMntTarget2:
+    Type: 'AWS::EFS::MountTarget'
+    Properties:
+      FileSystemId: !Ref WordPressContentEFS
+      SecurityGroups:
+        - !Ref WPContentSecGrp
+      SubnetId: !Select [1, !Ref SubnetIds]
+  WPContentMntTarget3:
+    Type: 'AWS::EFS::MountTarget'
+    Properties:
+      FileSystemId: !Ref WordPressContentEFS
+      SecurityGroups:
+        - !Ref WPContentSecGrp
+      SubnetId: !Select [2, !Ref SubnetIds]
+
 
 Outputs:
   SiteUrl:
