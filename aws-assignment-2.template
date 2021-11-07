@@ -1,0 +1,177 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label: 'Networking'
+        Parameters:
+          - VpcId
+          - SubnetIds
+      - Label: 'Database'
+        Parameters:
+          - RDSHost
+          - RDSName
+          - RDSUser
+          - RDSPassword
+          - RDSSecGrp
+      - Label: 'WordPress Instances'
+        Parameters:
+          - KeyName
+
+Parameters:
+  RDSHost:
+    Description: 'The RDS Database instance hostname.'
+    Default: 'database-1.cafvj7sxn38x.eu-north-1.rds.amazonaws.com'
+    Type: 'String'
+  RDSName:
+    Description: 'The RDS Database instance WordPress database name.'
+    Default: 'wpdb'
+    Type: 'String'
+  RDSUser:
+    Description: 'The RDS Database instance user.'
+    Default: 'admin'
+    Type: 'String'
+  RDSPassword:
+    Description: 'The RDS Database instance user password.'
+    Default: 'password'
+    Type: 'String'
+  RDSSecGrp:
+    Description: 'The Security Group that allows communication with the database instance.'
+    Type: 'AWS::EC2::SecurityGroup::Id'
+  VpcId:
+    ConstraintDescription: 'must be an existing VPC where the RDS Database instance lives'
+    Description: 'The Virtual Private Cloud in which to create the stack.'
+    Type: 'AWS::EC2::VPC::Id'
+  SubnetIds:
+    ConstraintDescription: 'must have at least one Subnet Id checked'
+    Description: 'Subnets in the specified VPC to use for the instances.'
+    Type: 'List<AWS::EC2::Subnet::Id>'
+  KeyName:
+    ConstraintDescription: 'must be the name of an existing EC2 KeyPair'
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to WordPress instances.'
+    Type: 'AWS::EC2::KeyPair::KeyName'
+
+
+Resources:
+  ApplicationLoadBalancer:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      Subnets: !Ref SubnetIds
+      SecurityGroups:
+        - !Ref ALBSecGrp
+  ALBListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref WordPressTargetGroup
+          Type: "forward"
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: "HTTP"
+  ALBSecGrp:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Specifies rules for in-/outbound HTTP."
+      VpcId: !Ref VpcId
+  ALBAllowInboundHTTP:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    Properties:
+      GroupId: !GetAtt ALBSecGrp.GroupId
+      IpProtocol: "tcp"
+      CidrIp: "0.0.0.0/0"
+      FromPort: 80
+      ToPort: 80
+
+  WordPressAutoScalingGroup:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+      DesiredCapacity: "2"
+      MinSize: "1"
+      MaxSize: "3"
+      HealthCheckGracePeriod: 360
+      HealthCheckType: "ELB"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WordPressTemplate
+        Version: !GetAtt WordPressTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref WordPressTargetGroup
+      VPCZoneIdentifier: !Ref SubnetIds
+  WordPressTargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      Port: 80
+      Protocol: 'HTTP'
+      VpcId: !Ref VpcId
+  WordPressTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
+    Properties:
+      LaunchTemplateData:
+        ImageId: 'ami-001c5f3c0a8b3f245' # Amazon Linux 2
+        InstanceType: 't3.micro'
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref RDSSecGrp
+          - !Ref WordPressSecGrp
+        UserData:
+          Fn::Base64: !Sub |-
+            #!/bin/bash -xe
+            yum update -y
+            amazon-linux-extras install -y php7.4
+            yum install -y httpd
+            cd /var/www/html
+            wget https://wordpress.org/latest.tar.gz
+            tar -xzf latest.tar.gz
+            rm latest.tar.gz
+            mv wordpress/* .
+            rm -r wordpress
+            cp wp-config-sample.php wp-config.php
+            sed -i "s/database_name_here/${RDSName}/" wp-config.php
+            sed -i "s/username_here/${RDSUser}/" wp-config.php
+            sed -i "s/password_here/${RDSPassword}/" wp-config.php
+            sed -i "s/localhost/${RDSHost}/" wp-config.php
+            sudo mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport ${!Ref WordPressContentEFS}.efs.eu-north-1.amazonaws.com:/ /var/www/html/wp-content
+            usermod -a -G apache ec2-user
+            chown -R ec2-user:apache /var/www
+            chmod 2775 /var/www && find /var/www -type d -exec chmod 2775 {} \;
+            find /var/www -type f -exec chmod 0664 {} \;
+            systemctl start httpd
+            systemctl enable httpd
+  WordPressSecGrp:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Specifies inbound rules for HTTP and SSH'
+      VpcId: !Ref VpcId
+  WPAllowInboundSSH:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !GetAtt WordPressSecGrp.GroupId
+      IpProtocol: 'tcp'
+      CidrIp: '0.0.0.0/0'
+      FromPort: 22
+      ToPort: 22
+  WPAllowInboundHTTP:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !GetAtt WordPressSecGrp.GroupId
+      SourceSecurityGroupId: !GetAtt ALBSecGrp.GroupId
+      IpProtocol: 'tcp'
+      FromPort: 80
+      ToPort: 80
+
+  WordPressContentEFS:
+    Type: 'AWS::EFS::FileSystem'
+    Properties:
+      BackupPolicy:
+        Status: 'DISABLED'
+      Encrypted: false
+      LifecyclePolicies:
+        - TransitionToIA: 'AFTER_90_DAYS'
+          TransitionToPrimaryStorageClass: 'AFTER_1_ACCESS'
+      PerformanceMode: 'generalPurpose'
+
+Outputs:
+  SiteUrl:
+    Description: 'DNS URL to the created WordPress instance.'
+    Value:
+      Fn::Join: [ '', [ 'http://', !GetAtt ApplicationLoadBalancer.DNSName ] ]

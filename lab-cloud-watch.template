@@ -1,0 +1,204 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
+
+Description: >
+  This template is meant to showcase an EC2 instance
+  monitored through a CloudWatch Dashboard.
+
+
+Parameters:
+  KeyName:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Description: 'Name of an existing EC2 KeyPair to enable access to the instances'
+    ConstraintDescription: 'must be the name of an existing EC2 KeyPair.'
+  VpcId:
+    Type: 'AWS::EC2::VPC::Id'
+    Description: 'VpcId of your existing Virtual Private Cloud (VPC)'
+    ConstraintDescription: 'must be the VPC Id of an existing Virtual Private Cloud.'
+  SubnetId:
+    Type: 'AWS::EC2::Subnet::Id'
+    Description: >
+      SubnetId in your Virtual Private Cloud (VPC) where the monitored
+      EC2 Instance will live.
+    ConstraintDescription: 'must be an existing subnet residing in the selected VPC.'
+
+
+Resources:
+  MonitoredInstance:
+    Type: 'AWS::EC2::Instance'
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: 'PT15M'
+    Metadata:
+      'AWS::CloudFormation::Init':
+        config:
+          packages:
+            yum:
+              amazon-cloudwatch-agent: []
+              collectd: []
+              httpd: []
+          files:
+            '/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json':
+              content: |-
+                {
+                  "agent": {
+                    "metrics_collection_interval": 60,
+                    "run_as_user": "root"
+                  },
+                  "metrics": {
+                    "append_dimensions": {
+                      "ImageId": "${!aws:ImageId}",
+                      "InstanceId": "${!aws:InstanceId}",
+                      "InstanceType": "${!aws:InstanceType}"
+                    },
+                    "metrics_collected": {
+                      "collectd": {},
+                      "cpu": {
+                        "measurement": [
+                          "cpu_usage_idle",
+                          "cpu_usage_iowait",
+                          "cpu_usage_user",
+                          "cpu_usage_system"
+                        ],
+                        "metrics_collection_interval": 60,
+                        "resources": [
+                          "*"
+                        ]
+                      },
+                      "disk": {
+                        "measurement": [
+                          "disk_used_percent"
+                        ],
+                        "metrics_collection_interval": 60
+                      },
+                      "mem": {
+                        "measurement": [
+                          "mem_used_percent"
+                        ],
+                        "metrics_collection_interval": 60
+                      },
+                      "swap": {
+                        "measurement": [
+                          "swap_used_percent"
+                        ],
+                        "metrics_collection_interval": 60
+                      }
+                    }
+                  },
+                  "logs": {
+                    "logs_collected": {
+                      "files": {
+                        "collect_list": [
+                          {
+                            "file_path": "/var/log/messages",
+                            "log_group_name": "messages"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+            '/var/www/html/index.html':
+              content: |-
+                <html>
+                  <head>
+                    <title>Monitored Web Server</title>
+                    <style>
+                      body {
+                        min-height: 100vh;
+                        padding: 0;
+                        margin: 0;
+                        display: grid;
+                        place-content: center;
+                      }
+                    </style>
+                  </head>
+                  <body>
+                    <h1>Monitored Web Server</h1>
+                  </body>
+                </html>
+          commands:
+            01_start-cwagent:
+              command: '/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s'
+          services:
+            sysvinit:
+              httpd:
+                enabled: true
+                ensureRunning: true
+    Properties:
+      IamInstanceProfile: !Ref MonitoredInstanceProfile
+      ImageId: 'ami-0d15082500b576303'
+      InstanceType: 't3.micro'
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref MonitoredInstanceSecGrp
+      SubnetId: !Ref SubnetId
+      Tags:
+        - Key: 'Name'
+          Value: 'MonitoredInstance'
+      UserData:
+        'Fn::Base64': !Sub |-
+          #!/bin/bash -xex
+          yum update -y
+          amazon-linux-extras install -y epel
+          /opt/aws/bin/cfn-init -v -s ${AWS::StackName} -r MonitoredInstance --region ${AWS::Region}
+          /opt/aws/bin/cfn-signal -e $? -s ${AWS::StackName} -r MonitoredInstance --region=${AWS::Region}
+
+  MonitoredInstanceSecGrp:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Enables inbound traffic for MonitoredInstance.'
+      GroupName: 'MonitoredInstanceSecGrp'
+      SecurityGroupIngress:
+        - CidrIp: '0.0.0.0/0'
+          Description: 'Allow all inbound SSH traffic.'
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+        - CidrIp: '0.0.0.0/0'
+          Description: 'Allow all inbound HTTP traffic.'
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+      VpcId: !Ref VpcId
+
+  MonitoredInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      InstanceProfileName: 'MonitoredInstanceProfile'
+      Roles:
+        - !Ref MonitoredInstanceRole
+
+  MonitoredInstanceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Description: >
+        Grants permission to send necessary monitoring data
+        to CloudWatch with the CloudWatch Agent.
+      Path: '/'
+      Policies:
+        - PolicyName: 'CloudWatchAgentServerPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'cloudwatch:PutMetricData'
+                  - 'ec2:DescribeVolumes'
+                  - 'ec2:DescribeTags'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:CreateLogStream'
+                  - 'logs:CreateLogGroup'
+                Resource: '*'
