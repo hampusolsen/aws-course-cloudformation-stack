@@ -123,6 +123,8 @@ Resources:
             yum update -y
             amazon-linux-extras install -y php7.4
             yum install -y httpd
+            systemctl start httpd
+            systemctl enable httpd
             cd /var/www/html
             wget https://wordpress.org/latest.tar.gz
             tar -xzf latest.tar.gz
@@ -134,13 +136,11 @@ Resources:
             sed -i "s/username_here/${RDSUser}/" wp-config.php
             sed -i "s/password_here/${RDSPassword}/" wp-config.php
             sed -i "s/localhost/${RDSHost}/" wp-config.php
-            sudo mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport ${!Ref WordPressContentEFS}.efs.eu-north-1.amazonaws.com:/ /var/www/html/wp-content
+            sudo mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev ${WordPressContentEFS}.efs.eu-north-1.amazonaws.com:/ /var/www/html/wp-content
             usermod -a -G apache ec2-user
             chown -R ec2-user:apache /var/www
             chmod 2775 /var/www && find /var/www -type d -exec chmod 2775 {} \;
             find /var/www -type f -exec chmod 0664 {} \;
-            systemctl start httpd
-            systemctl enable httpd
   WordPressSecGrp:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
