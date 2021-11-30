@@ -4,18 +4,21 @@ AWSTemplateFormatVersion: '2010-09-09'
 Metadata:
   'AWS::CloudFormation::Interface':
     ParameterGroups:
-      - Label: 'Networking'
+      - Label:
+          default: 'Networking'
         Parameters:
           - VpcId
           - SubnetIds
-      - Label: 'Database'
+      - Label:
+          default: 'Database'
         Parameters:
           - RDSHost
           - RDSName
           - RDSUser
           - RDSPassword
           - RDSSecGrp
-      - Label: 'WordPress Instances'
+      - Label:
+          default: 'WordPress Instances'
         Parameters:
           - KeyName
 
